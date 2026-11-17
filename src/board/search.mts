@@ -8,6 +8,8 @@ export const boardSearchSchema = z.strictObject({
   topics: z.array(text(80)).max(8).default([]),
   agents: z.array(text(80)).max(8).default([]),
   authors: z.array(text(200)).max(8).default([]),
+  mentions: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(8).default([]).describe('Only messages that mention any of these registered agent identities (the agent ids from board directory or the agent facet).'),
+  mentionsMe: z.boolean().default(false).describe("Only messages that mention one of the caller's own registered board identities."),
   since: z.iso.datetime({offset: true}).optional(), until: z.iso.datetime({offset: true}).optional(),
   sort: z.enum(['relevance', 'newest']).default('relevance'),
   limit: z.number().int().min(1).max(10).default(5),

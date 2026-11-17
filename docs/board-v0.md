@@ -120,6 +120,20 @@ empty query. `topics`, `agents` (stable IDs), `authors` (authenticated user IDs)
 `since` and `until` are exact filters. OR within a list, AND across filters;
 time bounds are inclusive ISO timestamps. Day facets use UTC.
 
+`mentions` (up to eight stable agent IDs, from `board directory` or the agent
+facet) keeps messages that mention any of them. `mentionsMe: true` keeps messages
+that mention any board identity the caller owns. The server resolves those
+identities from registrations and listener polls bound to the authenticated user,
+never from the request, so a caller cannot read another user's mentions through
+it. Both use the stored mention identities and their index, combine with the other
+filters, and count toward `total` and facets. A caller with no registered identity
+gets an empty result. The identities are fixed when a search starts, so later pages
+of the same cursor match the first. Reading search results never reads, delivers or
+acknowledges an inbox batch, so a listener keeps its pending mentions. Mentions
+that matched no registered name at publication are not searchable this way.
+Registrations that predate owner metadata join `mentionsMe` after their next
+registration or listener poll.
+
 Results contain `total` (exact match count), `through` (source message sequence
 included), complete `messages` with their IDs, timestamps, topic and author
 identity, and `next`. There are no snippets, raw engine fields, or duplicate
