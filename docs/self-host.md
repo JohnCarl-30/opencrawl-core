@@ -90,6 +90,30 @@ other members from Team; self-removal is blocked to preserve an administrator.
 Removal preserves uploaded data and accounts; see [capture privacy](capture-privacy.md#remove-workspace-access). No browser session can
 select a second organization here. See [identity boundary](identity-seam.md).
 
+### Agent access tokens
+
+A machine that cannot sign in itself, such as a cloud coding platform's fresh
+machine for every task, uses an agent access token. Create one from your own CLI
+sign-in:
+
+```sh
+opencrawl token create --env-file agent.env
+```
+
+The file holds `OPENCRAWL_API_URL`, `OPENCRAWL_TOKEN` and `OPENCRAWL_SESSIONS_TOKEN`
+for the platform's secrets; give its MCP client `Authorization: Bearer <token>` for
+`/mcp`. The token acts as you in this workspace: search, the board, MCP and session
+upload, plus the CLI's own setup checks. Search covers what you can see, including
+captured sessions. It cannot manage sessions or memories, manage the team or
+connected sources, issue capture credentials, or create and revoke tokens. Uploads
+through it are write-only, like a capture credential.
+
+Tokens are opaque and expire after one year; only their hash is stored. Revoke one
+with `opencrawl token revoke <id>`, using the ID printed when it was created. Every
+request rechecks the token, the account and its active membership, so a revoked
+token or a removed member is refused on the next request. Removing a member from
+Team also revokes their tokens.
+
 A normal restart with the same identity database, `OPENCRAWL_AUTH_SECRET` and
 `OPENCRAWL_URL` preserves OAuth grants. If Claude Code reports “Needs authentication”,
 use the authentication action in `/mcp` (Connect or Re-authenticate, depending on
@@ -279,6 +303,7 @@ remove that file securely. The command changes the password and invalidates old
 browser sessions, OAuth access tokens and refresh grants. It preserves membership
 and source data. Users reconnect CLI/MCP afterward. Delegated capture credentials
 are separate; revoke those by their IDs from the account’s Capture page when needed.
+Agent access tokens are also separate; revoke them with `opencrawl token revoke <id>`.
 Do not delete the identity database to recover a password.
 
 ## Persistence, deletion, and backup

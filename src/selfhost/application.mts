@@ -52,6 +52,7 @@ import {createWorkspaceSearch,createWorkspaceSearchHandler} from '../search/work
 import {captureSetupPrompt,cloudCapturePage} from '../sessions/cloud-setup.mjs';
 import {createCaptureCredentials,isCaptureCredential} from '../sessions/credentials.mjs';
 import {createSessionIngest,createCaptureHandler} from '../sessions/ingest.mjs';
+import {selfhostAgentTokens} from './agent-tokens.mjs';
 import {errorInfo} from '../errors.mjs';
 import type {Log} from '../integrations/ports.mjs';
 type Store=ReturnType<typeof createObjectStore>;
@@ -100,7 +101,12 @@ export function selfhostApplication({state,settings,store,eventIdentities,prefix
   const admit=singleOrganizationIdentity(directory,settings.organizationId),resolve=singleOrganizationPrincipal(directory,settings.organizationId);
   const accounts=localAuth({identity,url:settings.url,organizationId:settings.organizationId,setupToken:settings.setupToken,member:async browser=>(await admit(browser)).status===200});
   const credentials=createCaptureCredentials({state});
-  const identifyCli=accounts.identifyToken,organizations=teamService(directory,roleWriteGuard(state),credentials.revokeAll);
+  const identifyCli=accounts.identifyToken;
+  // Agent access tokens share the opaque occ1_ form with capture credentials and differ by stored purpose.
+  const agentTokens=selfhostAgentTokens({state,directory,organizationId:settings.organizationId,resolve:user=>resolve(user,settings.organizationId),
+    identifyHuman:authorization=>identifyCli(authorization),nonHuman:token=>isCaptureCredential(token)||isReplicasToken(token)||isDevinToken(token)});
+  // Removing a member revokes both kinds of delegated credential; every request also rechecks membership.
+  const organizations=teamService(directory,roleWriteGuard(state),async principal=>{await credentials.revokeAll(principal);await agentTokens.revokeAll(principal);});
   const approveDevin=devinApprovalHandler({connections:devin,authenticate:async req=>{
     const token=/^Bearer (.+)$/i.exec(req.headers.authorization??'')?.[1];
     if(isDevinToken(token)||isReplicasToken(token)||isCaptureCredential(token))throw Object.assign(new Error('Human admin sign-in required'),{status:403});
@@ -132,7 +138,7 @@ export function selfhostApplication({state,settings,store,eventIdentities,prefix
   const setup=createSetupStatus({state,search:authorizedSearch});
   const observe=createOnboardingObserver({cli:onboarding.cli,session:async(p,b)=>{await Promise.all([onboarding.session(p,b),setup.session(p,b)]);}});
   const board=authorizedBoard({state,authorize,recentSessions:createRecentSessions({state,store,prefix,...settings.search})});
-  const identifyAgent=async(req:IncomingMessage)=>{const token=/^Bearer (.+)$/i.exec(req.headers.authorization||'')?.[1];return isReplicasToken(token)?workloads.identify(token):isDevinToken(token)?devinWorkloads.identify(token):identifyCli(req.headers.authorization,{capture:true});};
+  const identifyAgent=async(req:IncomingMessage)=>{const token=/^Bearer (.+)$/i.exec(req.headers.authorization||'')?.[1];return isReplicasToken(token)?workloads.identify(token):isDevinToken(token)?devinWorkloads.identify(token):isCaptureCredential(token)?agentTokens.identify(token):identifyCli(req.headers.authorization,{capture:true});};
   const authenticate=async(req:IncomingMessage)=>{const identity=await identifyAgent(req);if(identity.status!==200)throw Object.assign(new Error('Sign in required'),{status:identity.status});return identity.principal;};
   const setupHandler=createSetupHandler({setup,authenticate});
   const query=createWorkspaceSearchHandler({search:authorizedSearch,authenticate});
@@ -140,6 +146,8 @@ export function selfhostApplication({state,settings,store,eventIdentities,prefix
   const boardHandler=createBoardHandler({board,authenticate});
   const mcp=createOpenCrawlMcp({origin:settings.url,revision:settings.revision,search:authorizedSearch,board,setup,authenticate:async(req,res)=>{
     const token=/^Bearer (.+)$/i.exec(req.headers.authorization||'')?.[1];
+    if(isCaptureCredential(token)){const result=await agentTokens.identify(token);if(result.status===200)return result.principal;
+      res.writeHead(result.status,{'Content-Type':'application/json'});res.end(JSON.stringify({error:result.status===503?'authorization_unavailable':'invalid_token'}));return null;}
     if(!isReplicasToken(token)&&!isDevinToken(token))return accounts.mcpIdentity(req,res);
     const result=await (isDevinToken(token)?devinWorkloads:workloads).identify(token!);if(result.status===200)return result.principal;
     res.writeHead(result.status,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'invalid_workload'}));return null;
@@ -148,7 +156,9 @@ export function selfhostApplication({state,settings,store,eventIdentities,prefix
     const token=/^Bearer (.+)$/.exec(req.headers.authorization||'')?.[1];
     if(isReplicasToken(token)||isDevinToken(token)){const result=await (isDevinToken(token)?devinWorkloads:workloads).identify(token);if(result.status!==200)throw Object.assign(new Error('Workload authentication required'),{status:result.status});return {...result.principal,captureAccess:'write'};}
     if(isCaptureCredential(token)) {
-      const delegated=await credentials.authenticate(token);
+      // An agent access token uploads like a capture credential: write-only, never reading or managing sessions.
+      let delegated:Principal|null=await credentials.authenticate(token);
+      if(!delegated){const agent=await agentTokens.identify(token);if(agent.status===403||agent.status===503)throw Object.assign(new Error('Agent access token refused'),{status:agent.status});delegated=agent.status===200?agent.principal:null;}
       if(!delegated)throw Object.assign(new Error('Capture credential expired or revoked'),{status:401});
       const principal=await authorize({tenantId:delegated.tenantId,userId:delegated.userId});
       if(req.method==='GET'&&req.url==='/api/sessions/identity')await observe.cli(principal);
@@ -188,6 +198,7 @@ export function selfhostApplication({state,settings,store,eventIdentities,prefix
       if(url.pathname==='/api/devin/connect')return await devinConnect(req,res);
       if(url.pathname==='/api/cli/workloads/devin/approval')return await approveDevin(req,res);
       if(url.pathname==='/mcp')return await mcp(req,res);
+      if(url.pathname==='/api/agent-tokens'||url.pathname.startsWith('/api/agent-tokens/'))return await agentTokens.handle(req,res,url.pathname);
       if(url.pathname.startsWith('/api/sessions/'))return await capture(req,res);
       if(url.pathname==='/api/search')return await query(req,res);
       if(url.pathname==='/api/search/fetch')return await fetchPassage(req,res);
